@@ -3,6 +3,7 @@
 import logging
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 from pymongo import ASCENDING, DESCENDING, MongoClient
@@ -19,9 +20,28 @@ def _leer_parquet(ruta) -> pd.DataFrame:
     return ds.dataset(str(ruta), format="parquet", partitioning="hive").to_table().to_pandas()
 
 
+def _valor_bson(valor: Any) -> Any:
+    """Convierte valores de NumPy/Pandas a tipos serializables por PyMongo."""
+    if isinstance(valor, np.ndarray):
+        return [_valor_bson(item) for item in valor.tolist()]
+    if isinstance(valor, (list, tuple)):
+        return [_valor_bson(item) for item in valor]
+    if isinstance(valor, dict):
+        return {clave: _valor_bson(item) for clave, item in valor.items()}
+    if isinstance(valor, np.generic):
+        return _valor_bson(valor.item())
+    if isinstance(valor, pd.Timestamp):
+        return None if pd.isna(valor) else valor.to_pydatetime()
+    if valor is None or valor is pd.NaT or valor is pd.NA:
+        return None
+    if isinstance(valor, float) and pd.isna(valor):
+        return None
+    return valor
+
+
 def _a_documentos(df: pd.DataFrame, geo: bool = False) -> list[dict[str, Any]]:
     df = df.astype(object).where(df.notna(), None)
-    documentos = df.to_dict(orient="records")
+    documentos = [_valor_bson(doc) for doc in df.to_dict(orient="records")]
     if geo:
         for doc in documentos:
             lat, lon = doc.pop("latitud", None), doc.pop("longitud", None)
